@@ -1,0 +1,245 @@
+---
+title: "NOAA Storm Database Analysis"
+subtitle: "Population Health and Economic Consequences"
+author: "Nikki Rayner"
+date: "24/07/2019"
+output: html_document
+---
+
+### Synopsis
+This analysis is designed to explore the impact of severe weather events on
+population health and the economic consequences. Population health is investigated
+through examination of the numbers of injuries and fatalies per event type.
+The economic consequences are evaluated through considering the cost of both crop
+and property damage for the highest-cost weather events. The data comes from the 
+NOAA Storm Database and covers all recorded events from January 1996 - November 2011.
+
+### Data Processing
+Download data, unzip it and read into R. For the unzipping process the 'R.utils' 
+package is used.
+```{r datadownload, cache=TRUE, echo=TRUE}
+url <- "http://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+download.file(url, "stormdata.bz2")
+library(R.utils)
+bunzip2("stormdata.bz2", "stormdata.csv", remove=FALSE)
+stormdata <- read.csv("stormdata.csv")
+```
+The NOAA website states that all 48 types of weather events were recorded from
+January 1996, and therefore we keep only the events from this date onwards, to avoid
+any potential overrepresentation of event types. We then select only the key
+variables that we might be interested in for our analysis.
+
+```{r datesubset, echo=TRUE}
+library(dplyr)
+stormdata$BGN_DATE <- as.Date(stormdata$BGN_DATE, format="%m/%d/%Y")
+recent <-  stormdata[stormdata$BGN_DATE >= "1996-01-01",]
+recent <- select(recent, STATE__, BGN_DATE,END_DATE, COUNTY, STATE, EVTYPE, FATALITIES, INJURIES,
+                 PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP)
+```
+
+The next stage is to cleanse the data. From looking at the unique events in the 'EVTYPE' variable,
+it is clear that there are some data cleansing issues; there are 516 unqiue events rather than the expected 48.
+Due to the time allowed for this assignment, the cleansing won't be completed thoroughly, but some of the most high frequency issues will be dealt with.
+
+```{r eventcleanse, echo=TRUE}
+recent <- mutate(recent, eventtype = toupper(trimws(EVTYPE)))
+recent$eventtype <- gsub("TSTM", "THUNDERSTORM", x=recent$eventtype)
+recent$eventtype <- gsub("(G35)", "", x=recent$eventtype)
+recent$eventtype <- gsub("(G45)", "", x=recent$eventtype)
+recent$eventtype <- gsub("HYPERTHERMIA", "HYPOTHERMIA", x=recent$eventtype)
+recent$eventtype <- gsub("URBAN/SML STREAM FLD", "FLOOD", x=recent$eventtype)
+recent$eventtype <- gsub("WILD/FOREST FIRE", "WILDFIRE", x=recent$eventtype)
+recent$eventtype <- gsub("WINTER WEATHER/MIX", "WINTER WEATHER", x=recent$eventtype)
+recent$eventtype <- gsub("^EXTREME COLD$", "EXTREME COLD/WIND CHILL", x=recent$eventtype)
+recent$eventtype <- gsub("COLD TEMPERATURE", "COLD/WIND CHILL", x=recent$eventtype)
+recent$eventtype <- gsub("EXTENDED COLD", "COLD/WIND CHILL", x=recent$eventtype)
+recent$eventtype <- gsub("FOG", "DENSE FOG", x=recent$eventtype)
+recent$eventtype <- gsub("LANDSLIDE", "DEBRIS FLOW", x=recent$eventtype)
+recent$eventtype <- gsub("RIP CURRENTS", "RIP CURRENT", x=recent$eventtype)
+recent <- mutate(recent, eventtype = toupper(trimws(eventtype)))
+recent <- mutate(recent, eventtype=as.factor(eventtype))
+```
+
+### Analysis
+
+#### 1. Population Health Analysis
+The first aim of this assignment is to establish which types of events are most harmful with respect to population health. To analyse the health effects of severe weather events, we consider both the number of fatalities and the number of injuries. We first summarise the event data, calculating the mean and total numbers for 
+each of these measures for each event.
+
+```{r healthsummary, echo=TRUE}
+dataevents <- group_by(recent, eventtype)
+poprisk <- summarise(dataevents, meandeath =mean(FATALITIES),
+                       totaldeath=sum(FATALITIES), meaninj=mean(INJURIES), 
+                     totalinj=sum(INJURIES))
+```
+Due to the brevity of this assignment, we'll only consider the event types that appear to have
+had the greatest impact of population health over the time period; we'll use the top 10 for each of the measures.
+```{r reduceevents, echo=TRUE}
+meandeathrisk <- arrange(poprisk, desc(meandeath))[1:10,1]
+totaldeathrisk<- arrange(poprisk, desc(totaldeath))[1:10,1]
+meaninjrisk <- arrange(poprisk, desc(meaninj))[1:10,1]
+totalinjrisk<- arrange(poprisk, desc(totalinj))[1:10,1]
+
+allrisks <- c(meandeathrisk, totaldeathrisk, meaninjrisk, totalinjrisk)
+keyevents <- unlist(allrisks)
+keyevents <- (unique(keyevents))
+```
+The 'keyevents' vector is a list of all the events that have the 10 highest mean or total
+numbers for either fatalities or injuries. This is used to reduce the size of the dataset
+to only those events that appear to have a relatively high impact on population health.
+```{r reduceevents2, echo=TRUE}
+evtable <- poprisk[poprisk$eventtype %in% keyevents,]
+```
+The next stage is to tidy the results further to make visualisation more straightforward.
+This includes: dropping any unused factor levels for the 'event type' variable; ordering events in the table by descending total fatalities/injuries; removing zero values from the table.
+```{r tidyhealthdata, echo=TRUE}
+#Drop unused factor levels
+evtable$eventtype <- droplevels(evtable$eventtype)
+#Order table by total fatalities
+levorder1 <- evtable$eventtype[order(evtable$totaldeath, decreasing = TRUE)]
+evtable1 <- evtable
+evtable1$eventtype <- factor(evtable1$eventtype, levels=levorder1)
+#Order table by total injuries
+levorder2 <- evtable$eventtype[order(evtable$totalinj, decreasing = TRUE)]
+evtable2 <- evtable
+evtable2$eventtype <- factor(evtable2$eventtype, levels=levorder2)
+#Remove zero values from the table
+evtable1 <- evtable1[evtable1$totaldeath !=0,]
+evtable2 <- evtable2[evtable2$totalinj !=0,]
+head(evtable1)
+head(evtable2)
+```
+The resulting tables are ready for use to create visualisations. This will be covered in the 'Results' section.
+
+#### 2. Economic Consequences
+The second aim of the assignment is to establish which types of events have the greatest economic consequences. For this we consider the costs of both crop damage and property damage for different types of event.   
+We start by recoding the 'exponent' columns so that all entries (where present) are integer values.
+```{r recodeexp, echo=TRUE}
+exponent <- recent
+exponent$PROPDMGEXP <- gsub("h", "2", x=exponent$PROPDMGEXP, ignore.case=TRUE)
+exponent$PROPDMGEXP <- gsub("k", "3", x=exponent$PROPDMGEXP, ignore.case=TRUE)
+exponent$PROPDMGEXP <- gsub("m", "6", x=exponent$PROPDMGEXP, ignore.case=TRUE)
+exponent$PROPDMGEXP <- gsub("b", "9", x=exponent$PROPDMGEXP, ignore.case=TRUE)
+exponent$CROPDMGEXP <- gsub("h", "2", x=exponent$CROPDMGEXP, ignore.case=TRUE)
+exponent$CROPDMGEXP <- gsub("k", "3", x=exponent$CROPDMGEXP, ignore.case=TRUE)
+exponent$CROPDMGEXP <- gsub("m", "6", x=exponent$CROPDMGEXP, ignore.case=TRUE)
+exponent$CROPDMGEXP <- gsub("b", "9", x=exponent$CROPDMGEXP, ignore.case=TRUE)
+
+exponent$CROPDMGEXP <- as.numeric(exponent$CROPDMGEXP)
+exponent$PROPDMGEXP <- as.numeric(exponent$PROPDMGEXP)
+```
+
+For the purposes of this assignment, we will only consider events where the cost impact is counted in either the 'millions' or 'billions' of USD. These are the events that are most likely to be of interest to decision-makers due to the scale of their economic impact.In a fuller piece of analysis all event types could be considered.
+
+```{r subsetexp, echo=TRUE}
+location <- which(exponent$CROPDMGEXP>=6| exponent$PROPDMGEXP>=6)
+subset <- exponent[location,]
+```
+The next stage is to calculate the total cost impact in USD by using both the damage cost columns and the exponent columns. 
+
+```{r calccost, echo=TRUE}
+values1 <- mutate(subset, PROPVALUE = as.numeric(""))
+
+#Calculate property damage costs
+for (i in 1:nrow(values1)){
+if(is.na(values1$PROPDMGEXP[i])){
+  values1$PROPVALUE[i]<-0}else{
+    values1$PROPVALUE[i]<-values1$PROPDMG[i]*10^(values1$PROPDMGEXP[i])
+  }
+}
+#Calculate crop damage costs
+values2 <- mutate(values1, CROPVALUE =as.numeric(""))
+for (i in 1:nrow(values2)){
+  if(is.na(values2$CROPDMGEXP[i])){
+    values2$CROPVALUE[i]<-0}else{
+      values2$CROPVALUE[i]<-values2$CROPDMG[i]*10^(values2$CROPDMGEXP[i])
+    }
+}
+```
+We then summarise the costs, ready for visualisation.
+
+```{r summarycost, echo=TRUE}
+
+summarycost <- group_by(values2, eventtype)
+costs <- summarise(summarycost, meancropcost =mean(CROPVALUE),
+                     totalcropcost=sum(CROPVALUE), meanpropcost=mean(PROPVALUE), 
+                     totalpropcost=sum(PROPVALUE), totalcost = sum(CROPVALUE, PROPVALUE))
+costs <- arrange(costs, desc(totalcost))
+```
+
+To make visualisation more straightforward, we reduce the number of events included (to the top 10) - this is sufficient for our analysis purposes in this assignment. 
+We also tidy the data further by: dropping any unused factor levels for the 'event type' variable; ordering events in the table by descending total cost; stacking the cost columns for crops and property.
+
+```{r tidycostdata, echo=TRUE}
+cost10 <- costs[1:10,]
+cost10$eventtype <- droplevels(cost10$eventtype)
+
+#Order levels by cost descending
+levorder3 <- cost10$eventtype[order(cost10$totalcost, decreasing = TRUE)]
+cost10$eventtype <- factor(cost10$eventtype, levels=levorder3)
+
+#Stack cost columns for crops and property
+stk <- data.frame(cost10[1], stack(cost10[c(3,5)]))
+stk <- mutate(stk, Cost= values/10^9)
+names(stk) <- c("eventtype", "values", "ind", "valuescaled")
+head(stk, 10)
+```
+
+### Results
+#### 1. Population Health Analysis Results
+We create two visualisations, which show the mean and total numbers for fatalities and injuries respectively. 
+
+```{r fatalityviz, echo=TRUE}
+par(mar = c(9,5,2,6))
+with(evtable1, plot.default(eventtype, totaldeath, type="p", pch=16, col="blue", axes=FALSE, ylab="Total deaths", xlab=""))
+axis(side = 1, at = as.numeric(evtable1$eventtype), labels = evtable1$eventtype, ylim=2000, las=2, xlab="")
+axis(side=2)
+par(new = T)
+with(evtable1, plot.default(eventtype, meandeath, type="p", axes=F, xlab=NA, ylab=NA, cex=1.2, pch=4))
+axis(side=4)
+mtext(side = 4, line = 3, 'Mean deaths')
+box()
+legend("topright",
+       legend=c("Total deaths", "Mean deaths"),
+       pch=c(16, 4), col=c("blue", "black"))
+title(main="Fatalities by type of severe weather event")
+```
+  
+  This visualisation can be used by decision-makers to assess harm caused by severe weather events either by total fatalities across all events of each type or the mean fatalities per event of each type. The graph shows that, over the time period, 'Excessive Heat' and 'Tornados' have caused the most deaths (probably due to the high frequency of events), whilst 'Cold and Snow' appears to have the highest impact per event (with mean deaths of 14).
+
+```{r injuryviz, echo=TRUE}
+par(mar = c(9,5,2,6))
+with(evtable2, plot.default(eventtype, totalinj, type="p", pch=16, col="blue", axes=FALSE, ylab="Total injuries", xlab=""))
+axis(side = 1, at = as.numeric(evtable2$eventtype), labels = evtable2$eventtype, ylim=2000, las=2, xlab="")
+axis(side=2)
+par(new = T)
+with(evtable2, plot.default(eventtype, meaninj, type="p", axes=F, xlab=NA, ylab=NA, cex=1.2, pch=4))
+axis(side=4)
+mtext(side = 4, line = 3, 'Mean injuries')
+box()
+legend("topright",
+       legend=c("Total injuries", "Mean injuries"),
+      pch=c(16, 4), col=c("blue", "black"))
+title(main="Injuries by type of severe weather event")
+```
+  
+  This visualisation can be used by decision-makers to assess harm caused by severe weather events either by total injuries across all events of each type or the mean fatalities per event of each type. The graph shows that, over the time period, 'Tornados' have caused, by far, the most injuries (probably due to the high frequency of events), whilst 'Hurrican/Typhoon', 'Heat Wave' and 'Winter Weather Mix' appear to have the highest impacts per event.
+
+#### 2. Economic Consequences Results
+We create one visualisation to show the total cost for our events, split by type of damage.
+
+```{r costviz, echo=TRUE}
+library(ggplot2)
+#Relabel factors for use in legend
+stk$ind <- factor(stk$ind, levels = c("totalcropcost","totalpropcost"),
+                              labels = c("Crop Cost","Property Cost"))
+require(scales)
+plot <- ggplot() + geom_bar(aes(y = valuescaled, x = eventtype, fill=ind),data = stk,stat="identity")
+plot + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + 
+  labs(x="Event", y="Cost (billion dollars)", title="Cost of damage by severe weather event type") + scale_y_continuous(labels = comma) +
+  theme(legend.position="right", legend.direction="vertical", legend.title = element_blank())
+```
+  
+  This visualisation shows that high-cost 'Flood' events have caused the highest total cost of damage, most of which is to property. The only high-cost event that appears to have a higher damage cost for crops is 'Drought'.  
+  
+A further interesting piece of analysis would be to investigate the proportion of all costs by event type compared to the proportion of number of events by type. However, there isn't spcae to investigate this in this assignment (due to 3 figure limit).
